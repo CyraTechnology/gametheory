@@ -2,96 +2,103 @@
 session_start();
 require '../config/db.php';
 
-if(!isset($_SESSION['admin'])){
-header("Location: ../auth/admin_login.php");
+if(!isset($_SESSION['user_id'])){
+header("Location: ../auth/seller_login.php");
 exit;
 }
 
+$seller=$_SESSION['user_id'];
+
+
 /* ======================
-PRODUCT ANALYTICS
+SELLER ANALYTICS
 ====================== */
 
-$analytics = $conn->query("
+$stmt=$conn->prepare("
 SELECT 
 p.id,
 p.name,
-p.seller_id,
 
-COUNT(DISTINCT pv.id) as views,
+(SELECT COUNT(*) 
+ FROM product_views pv 
+ WHERE pv.product_id=p.id) as views,
 
-SUM(pi.interaction_type='add_to_cart') as cart_clicks,
+(SELECT COUNT(*) 
+ FROM product_interactions pi 
+ WHERE pi.product_id=p.id 
+ AND pi.interaction_type='add_to_cart') as cart_clicks,
 
-SUM(pi.interaction_type='purchase') as purchases,
-
-ROUND(
-(COUNT(DISTINCT pv.id)*0.4) +
-(SUM(pi.interaction_type='add_to_cart')*0.3) +
-(SUM(pi.interaction_type='purchase')*0.3)
-,2) as demand_score
+(SELECT COUNT(*) 
+ FROM product_interactions pi 
+ WHERE pi.product_id=p.id 
+ AND pi.interaction_type='purchase') as purchases
 
 FROM products p
 
-LEFT JOIN product_views pv 
-ON pv.product_id=p.id
+WHERE p.seller_id=?
 
-LEFT JOIN product_interactions pi 
-ON pi.product_id=p.id
-
-GROUP BY p.id
-ORDER BY demand_score DESC
+ORDER BY views DESC
 ");
 
-$products=$analytics->fetchAll(PDO::FETCH_ASSOC);
+$stmt->execute([$seller]);
+
+$products=$stmt->fetchAll(PDO::FETCH_ASSOC);
 
 include "../layout/header.php";
-include "../layout/admin_sidebar.php";
+include "../layout/seller_sidebar.php";
 ?>
 
 <div class="main">
 
 <h3>
-<i class="fa fa-chart-line"></i> Market Analytics
+
+<i class="fa fa-chart-line"></i> Product Insights
+
 </h3>
+
 
 <div class="card p-4 mb-4">
 
-<canvas id="demandChart"></canvas>
+<canvas id="sellerChart"></canvas>
 
 </div>
 
 
 <div class="card p-4">
 
-<h5>Product Demand Ranking</h5>
+<h5>Your Product Performance</h5>
 
 <table class="table table-hover">
 
 <tr>
 
 <th>Product</th>
-<th>Seller</th>
 <th>Views</th>
-<th>Cart</th>
+<th>Cart Clicks</th>
 <th>Purchases</th>
-<th>Demand Score</th>
+<th>Demand</th>
 
 </tr>
 
 <?php foreach($products as $p){
 
-$color="secondary";
+$demand="Low";
+$color="danger";
 
-if($p['demand_score'] > 200) $color="success";
-elseif($p['demand_score'] > 100) $color="warning";
-else $color="danger";
+if($p['views']>300){
+$demand="High";
+$color="success";
+}
+elseif($p['views']>100){
+$demand="Medium";
+$color="warning";
+}
 
 ?>
 
 <tr>
 
 <td><?= $p['name'] ?></td>
-
-<td><?= $p['seller_id'] ?></td>
 
 <td><?= $p['views'] ?></td>
 
@@ -103,7 +110,7 @@ else $color="danger";
 
 <span class="badge bg-<?= $color ?>">
 
-<?= $p['demand_score'] ?>
+<?= $demand ?>
 
 </span>
 
@@ -136,16 +143,16 @@ echo $p['views'].",";
 } ?>
 ];
 
-const purchases = [
+const cart = [
 <?php foreach($products as $p){
-echo $p['purchases'].",";
+echo $p['cart_clicks'].",";
 } ?>
 ];
 
 
-new Chart(document.getElementById('demandChart'),{
+new Chart(document.getElementById('sellerChart'),{
 
-type:'bar',
+type:'line',
 
 data:{
 labels:labels,
@@ -155,10 +162,9 @@ datasets:[
 label:'Views',
 data:views
 },
-
 {
-label:'Purchases',
-data:purchases
+label:'Cart Clicks',
+data:cart
 }
 ]
 

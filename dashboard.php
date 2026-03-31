@@ -1,115 +1,104 @@
 <?php
+
 session_start();
 require '../config/db.php';
 
-if(!isset($_SESSION['admin'])){
-header("Location: ../auth/admin_login.php");
+if(!isset($_SESSION['user_id'])){
+header("Location: ../auth/seller_login.php");
 exit;
 }
 
-
-/* ======================
-SYSTEM STATS
-====================== */
-
-$total_users=$conn->query("SELECT COUNT(*) FROM users")->fetchColumn();
-
-$total_sellers=$conn->query("
-SELECT COUNT(*) FROM users WHERE role='seller'
-")->fetchColumn();
-
-$total_wallet=$conn->query("
-SELECT SUM(balance) FROM wallets
-")->fetchColumn();
-
-$total_orders=$conn->query("
-SELECT COUNT(*) FROM purchase_orders
-")->fetchColumn();
-
-$total_products=$conn->query("
-SELECT COUNT(*) FROM products
-")->fetchColumn();
-
-$total_competitors=$conn->query("
-SELECT COUNT(DISTINCT competitor_name) FROM competitor_prices
-")->fetchColumn();
+$seller=$_SESSION['user_id'];
 
 
 /* ======================
-PRICE POLICY VIOLATIONS
+SELLER WALLET
 ====================== */
 
-$violations=$conn->query("
+$wallet=$conn->prepare("
+SELECT balance 
+FROM wallets 
+WHERE user_id=?
+");
+
+$wallet->execute([$seller]);
+$balance=$wallet->fetchColumn();
+
+
+/* ======================
+SELLER PRODUCTS COUNT
+====================== */
+
+$product_count=$conn->prepare("
 SELECT COUNT(*) 
-FROM products
-WHERE current_price < min_allowed_price
-")->fetchColumn();
+FROM products 
+WHERE seller_id=?
+");
+
+$product_count->execute([$seller]);
+$total_products=$product_count->fetchColumn();
 
 
 /* ======================
-RECENT ORDERS
+TODAY SALES
 ====================== */
 
-$recent_orders=$conn->query("
-SELECT po.order_number,
-u.name as customer,
-p.name as product,
-po.unit_price,
-po.status
+$today_sales=$conn->prepare("
+SELECT SUM(unit_price*quantity) 
 FROM purchase_orders po
-LEFT JOIN users u ON u.id = po.user_id
-LEFT JOIN products p ON p.id = po.product_id
-ORDER BY po.ordered_at DESC
-LIMIT 5
+JOIN products p ON p.id=po.product_id
+WHERE p.seller_id=?
+AND DATE(po.ordered_at)=CURDATE()
+");
+
+$today_sales->execute([$seller]);
+$sales=$today_sales->fetchColumn();
+
+
+/* ======================
+MARKET RANK (BASED ON SALES)
+====================== */
+
+$rank=$conn->query("
+SELECT seller_id,
+SUM(po.unit_price*po.quantity) as revenue
+FROM purchase_orders po
+JOIN products p ON p.id=po.product_id
+GROUP BY seller_id
+ORDER BY revenue DESC
 ")->fetchAll(PDO::FETCH_ASSOC);
 
+$market_rank="-";
+
+$i=1;
+foreach($rank as $r){
+
+if($r['seller_id']==$seller){
+$market_rank="#".$i;
+break;
+}
+
+$i++;
+}
 
 
 include "../layout/header.php";
-include "../layout/admin_sidebar.php";
+include "../layout/seller_sidebar.php";
+
 ?>
 
 <div class="main">
 
-<h2>Admin Dashboard</h2>
+<h2>Seller Dashboard</h2>
 
 <div class="row">
 
 <div class="col-md-3">
 <div class="card p-3">
-Total Users
-<div class="stat"><?= $total_users ?></div>
+Wallet
+<div class="stat">₹<?= number_format($balance) ?></div>
 </div>
 </div>
-
-<div class="col-md-3">
-<div class="card p-3">
-Total Sellers
-<div class="stat"><?= $total_sellers ?></div>
-</div>
-</div>
-
-<div class="col-md-3">
-<div class="card p-3">
-Orders
-<div class="stat"><?= $total_orders ?></div>
-</div>
-</div>
-
-<div class="col-md-3">
-<div class="card p-3">
-Wallet Holdings
-<div class="stat">₹<?= number_format($total_wallet) ?></div>
-</div>
-</div>
-
-</div>
-
-
-<br>
-
-
-<div class="row">
 
 <div class="col-md-3">
 <div class="card p-3">
@@ -120,174 +109,63 @@ Products
 
 <div class="col-md-3">
 <div class="card p-3">
-Competitors
-<div class="stat"><?= $total_competitors ?></div>
+Today's Sales
+<div class="stat">₹<?= number_format($sales) ?></div>
 </div>
 </div>
 
 <div class="col-md-3">
 <div class="card p-3">
-Policy Violations
-<div class="stat text-danger"><?= $violations ?></div>
-</div>
-</div>
-
-<div class="col-md-3">
-<div class="card p-3">
-Price Policy
-<div class="stat text-success">AUTO LOCK</div>
+Market Rank
+<div class="stat"><?= $market_rank ?></div>
 </div>
 </div>
 
 </div>
-
 
 <br>
 
-
-<div class="row">
-
-<div class="col-md-6">
 <div class="card p-4">
 
-<h5>Market Demand</h5>
-
-<canvas id="demandChart"></canvas>
-
-</div>
-</div>
-
-<div class="col-md-6">
-<div class="card p-4">
-
-<h5>Price Competition</h5>
-
-<canvas id="priceChart"></canvas>
-
-</div>
-</div>
-
-</div>
-
-
-<br>
-
-
-<div class="card p-4">
-
-<h5>Recent Orders</h5>
+<h5>Competitor Price Monitor</h5>
 
 <table class="table">
 
 <tr>
-<th>Order</th>
-<th>Customer</th>
-<th>Product</th>
+<th>Company</th>
 <th>Price</th>
-<th>Status</th>
+<th>Demand</th>
+<th>Trend</th>
 </tr>
 
-<?php foreach($recent_orders as $o){ ?>
+<?php
 
-<tr>
+$prices=$conn->query("
+SELECT competitor_name,price,demand_level,price_trend 
+FROM competitor_prices
+ORDER BY price ASC
+");
 
-<td><?= $o['order_number'] ?></td>
+foreach($prices as $p){
 
-<td><?= $o['customer'] ?></td>
+echo "<tr>
 
-<td><?= $o['product'] ?></td>
+<td>".$p['competitor_name']."</td>
+<td>₹".number_format($p['price'])."</td>
+<td>".$p['demand_level']."</td>
+<td>".$p['price_trend']."</td>
 
-<td>₹<?= number_format($o['unit_price']) ?></td>
+</tr>";
 
-<td>
+}
 
-<span class="badge
-<?= $o['status']=='pending'?'bg-warning':'' ?>
-<?= $o['status']=='processing'?'bg-info':'' ?>
-<?= $o['status']=='delivered'?'bg-success':'' ?>
-">
-
-<?= $o['status'] ?>
-
-</span>
-
-</td>
-
-</tr>
-
-<?php } ?>
+?>
 
 </table>
 
 </div>
 
-
-<br>
-
-
-<div class="card p-4">
-
-<h5>Admin Quick Controls</h5>
-
-<div class="row">
-
-<div class="col-md-3">
-<a href="orders.php" class="btn btn-dark w-100">Manage Orders</a>
 </div>
-
-<div class="col-md-3">
-<a href="wallet.php" class="btn btn-primary w-100">Wallet Control</a>
-</div>
-
-<div class="col-md-3">
-<a href="market_monitor.php" class="btn btn-success w-100">Market Monitor</a>
-</div>
-
-<div class="col-md-3">
-<a href="equilibrium.php" class="btn btn-warning w-100">Equilibrium Policy</a>
-</div>
-
-</div>
-
-</div>
-
-</div>
-
-
-
-<script>
-
-new Chart(document.getElementById('demandChart'),{
-
-type:'line',
-
-data:{
-labels:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-datasets:[{
-label:'Demand',
-data:[120,190,220,260,300,280,340],
-borderWidth:2
-}]
-}
-
-});
-
-
-new Chart(document.getElementById('priceChart'),{
-
-type:'bar',
-
-data:{
-labels:['Competitor A','Competitor B','Competitor C'],
-datasets:[{
-label:'Avg Price',
-data:[1100,1080,1050]
-}]
-}
-
-});
-
-</script>
 
 </body>
 </html>
